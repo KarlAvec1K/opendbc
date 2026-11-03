@@ -16,7 +16,9 @@ class SubaruMsg(enum.IntEnum):
   Wheel_Speeds      = 0x13a
   ES_LKAS           = 0x122
   ES_LKAS_ANGLE     = 0x124
+  ES_Brake          = 0x220
   ES_Distance       = 0x221
+  ES_Status         = 0x222
   ES_DashStatus     = 0x321
   ES_LKAS_State     = 0x322
   ES_Infotainment   = 0x323
@@ -33,6 +35,11 @@ def lkas_tx_msgs(alt_bus, lkas_msg=SubaruMsg.ES_LKAS):
           [SubaruMsg.ES_DashStatus,     SUBARU_MAIN_BUS],
           [SubaruMsg.ES_LKAS_State,     SUBARU_MAIN_BUS],
           [SubaruMsg.ES_Infotainment,   SUBARU_MAIN_BUS]]
+
+
+def long_tx_msgs(alt_bus):
+  return [[SubaruMsg.ES_Brake, alt_bus],
+          [SubaruMsg.ES_Status, alt_bus]]
 
 
 def fwd_blacklisted_addr(lkas_msg=SubaruMsg.ES_LKAS):
@@ -127,6 +134,43 @@ class TestSubaruGen2TorqueStockLongitudinalSafety(TestSubaruStockLongitudinalSaf
   SAFETY_PARAM = SubaruSafetyFlags.GEN2
 
   TX_MSGS = lkas_tx_msgs(SUBARU_ALT_BUS)
+
+
+class SubaruAscentLongitudinalSafetyBase(TestSubaruSafetyBase, common.LongitudinalGasBrakeSafetyTest):
+  TX_MSGS = lkas_tx_msgs(SUBARU_MAIN_BUS) + long_tx_msgs(SUBARU_MAIN_BUS)
+  RELAY_MALFUNCTION_ADDRS = {SUBARU_MAIN_BUS: (SubaruMsg.ES_LKAS, SubaruMsg.ES_DashStatus,
+                                                SubaruMsg.ES_LKAS_State, SubaruMsg.ES_Infotainment,
+                                                SubaruMsg.ES_Brake, SubaruMsg.ES_Status, SubaruMsg.ES_Distance)}
+  FWD_BLACKLISTED_ADDRS = {SUBARU_CAM_BUS: [SubaruMsg.ES_LKAS, SubaruMsg.ES_Brake, SubaruMsg.ES_Distance,
+                                             SubaruMsg.ES_Status, SubaruMsg.ES_DashStatus,
+                                             SubaruMsg.ES_LKAS_State, SubaruMsg.ES_Infotainment]}
+
+  MIN_GAS = 808
+  MAX_GAS = 3800
+  INACTIVE_GAS = 1818
+  MAX_POSSIBLE_GAS = 2**13
+  MIN_BRAKE = 0
+  MAX_BRAKE = 600
+  MAX_POSSIBLE_BRAKE = 2**16
+  MIN_RPM = 0
+  MAX_RPM = 3600
+  MAX_POSSIBLE_RPM = 2**13
+
+  def _send_gas_msg(self, gas):
+    return self.packer.make_can_msg_safety("ES_Distance", self.ALT_MAIN_BUS, {"Cruise_Throttle": gas})
+
+  def _send_brake_msg(self, brake):
+    return self.packer.make_can_msg_safety("ES_Brake", self.ALT_MAIN_BUS, {"Brake_Pressure": brake})
+
+  def _send_rpm_msg(self, rpm):
+    return self.packer.make_can_msg_safety("ES_Status", self.ALT_MAIN_BUS, {"Cruise_RPM": rpm})
+
+  def test_rpm_safety_check(self):
+    self._generic_limit_safety_check(self._send_rpm_msg, self.MIN_RPM, self.MAX_RPM, 0, self.MAX_POSSIBLE_RPM, 1)
+
+
+class TestSubaruGen1AscentLongitudinalSafety(SubaruAscentLongitudinalSafetyBase, TestSubaruTorqueSafetyBase):
+  SAFETY_PARAM = SubaruSafetyFlags.LONG | SubaruSafetyFlags.ASCENT_LONG_THROTTLE
 
 
 if __name__ == "__main__":

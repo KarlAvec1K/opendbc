@@ -33,6 +33,8 @@ class CarInterface(CarInterfaceBase):
       if 0x228 in fingerprint[0]:
         ret.flags |= SubaruFlags.HAS_BSM.value
       ret.safetyConfigs = [get_safety_config(structs.CarParams.SafetyModel.subaru)]
+      if candidate == CAR.SUBARU_ASCENT:
+        ret.safetyConfigs[0].safetyParam |= SubaruSafetyFlags.ASCENT_LONG_THROTTLE.value
       if ret.flags & SubaruFlags.GLOBAL_GEN2:
         ret.safetyConfigs[0].safetyParam |= SubaruSafetyFlags.GEN2.value
 
@@ -89,9 +91,8 @@ class CarInterface(CarInterfaceBase):
     else:
       raise ValueError(f"unknown car: {candidate}")
 
-    # TODO: the longitudinal limits need to be speed-dependent, so alpha long is disabled for now
-    # revert this in the PR that re-enables Subaru longitudinal: https://github.com/commaai/opendbc/pull/3689
-    ret.alphaLongitudinalAvailable = False
+    # Ascent Alpha Long uses a speed-dependent feed-forward calibration and a dedicated Panda gas cap.
+    ret.alphaLongitudinalAvailable = candidate == CAR.SUBARU_ASCENT
     ret.openpilotLongitudinalControl = alpha_long and ret.alphaLongitudinalAvailable
 
     if ret.flags & SubaruFlags.GLOBAL_GEN2 and ret.openpilotLongitudinalControl:

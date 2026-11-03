@@ -1,15 +1,50 @@
+import math
 import numpy as np
 from opendbc.can import CANPacker
-from opendbc.car import Bus, make_tester_present_msg
+from opendbc.car import Bus, DT_CTRL, make_tester_present_msg
 from opendbc.car.lateral import apply_driver_steer_torque_limits, common_fault_avoidance
 from opendbc.car.interfaces import CarControllerBase
 from opendbc.car.subaru import subarucan
-from opendbc.car.subaru.values import DBC, GLOBAL_ES_ADDR, CanBus, CarControllerParams, SubaruFlags
+from opendbc.car.subaru.values import DBC, GLOBAL_ES_ADDR, CanBus, CAR, CarControllerParams, SubaruFlags
 
 # FIXME: These limits aren't exact. The real limit is more than likely over a larger time period and
 # involves the total steering angle change rather than rate, but these limits work well for now
 MAX_STEER_RATE = 25  # deg/s
 MAX_STEER_RATE_FRAMES = 7  # tx control frames needed before torque can be cut
+
+
+_ASCENT_ACCEL_FEEDBACK_MIN_SPEED = 70.0 / 3.6
+_ASCENT_ACCEL_FEEDBACK_FULL_SPEED = 80.0 / 3.6
+_ASCENT_ACCEL_FEEDBACK_TIME_CONSTANT = 0.75
+_ASCENT_ACCEL_FEEDBACK_GAIN = 1.5
+_ASCENT_ACCEL_FEEDBACK_MAX_CORRECTION = 0.65
+
+
+def _throttle_max_for_car(car_fingerprint):
+  if car_fingerprint == CAR.SUBARU_ASCENT:
+    return CarControllerParams.ASCENT_THROTTLE_MAX
+  return CarControllerParams.THROTTLE_MAX
+
+
+def _ascent_adaptive_accel_request(requested_accel, measured_accel, v_ego, filtered_error, dt):
+  """Apply a bounded, speed-gated correction for the Ascent's measured accel shortfall."""
+  values = (requested_accel, measured_accel, v_ego, filtered_error, dt)
+  if not all(math.isfinite(value) for value in values) or requested_accel <= 0.0 or dt <= 0.0:
+    return requested_accel, 0.0
+
+  if v_ego < _ASCENT_ACCEL_FEEDBACK_MIN_SPEED:
+    return requested_accel, 0.0
+
+  alpha = dt / (_ASCENT_ACCEL_FEEDBACK_TIME_CONSTANT + dt)
+  filtered_error += alpha * (requested_accel - measured_accel - filtered_error)
+  filtered_error = min(max(filtered_error, -1.0), 1.0)
+  speed_weight = min(max(
+    (v_ego - _ASCENT_ACCEL_FEEDBACK_MIN_SPEED) /
+    (_ASCENT_ACCEL_FEEDBACK_FULL_SPEED - _ASCENT_ACCEL_FEEDBACK_MIN_SPEED),
+    0.0), 1.0)
+  correction = min(max(filtered_error, 0.0) * _ASCENT_ACCEL_FEEDBACK_GAIN,
+                   _ASCENT_ACCEL_FEEDBACK_MAX_CORRECTION) * speed_weight
+  return requested_accel + correction, filtered_error
 
 
 class CarController(CarControllerBase):
@@ -19,6 +54,7 @@ class CarController(CarControllerBase):
 
     self.cruise_button_prev = 0
     self.steer_rate_counter = 0
+    self.ascent_accel_feedback_error = 0.0
 
     self.p = CarControllerParams(CP)
     self.packer = CANPacker(DBC[CP.carFingerprint][Bus.pt])
@@ -60,15 +96,31 @@ class CarController(CarControllerBase):
     # *** longitudinal ***
 
     if CC.longActive:
-      apply_throttle = int(round(np.interp(actuators.accel, CarControllerParams.THROTTLE_LOOKUP_BP, CarControllerParams.THROTTLE_LOOKUP_V)))
-      apply_rpm = int(round(np.interp(actuators.accel, CarControllerParams.RPM_LOOKUP_BP, CarControllerParams.RPM_LOOKUP_V)))
+      if self.CP.carFingerprint == CAR.SUBARU_ASCENT and actuators.accel >= 0.0:
+        accel_ff, self.ascent_accel_feedback_error = _ascent_adaptive_accel_request(
+          actuators.accel, CS.out.aEgo, CS.out.vEgo, self.ascent_accel_feedback_error, DT_CTRL,
+        )
+        accel_ff = np.clip(accel_ff, 0.0, 2.0)
+        throttle_base = np.interp(CS.out.vEgo, CarControllerParams.ASCENT_LONG_SPEED_BP,
+                                  CarControllerParams.ASCENT_THROTTLE_BASE_V)
+        rpm_base = np.interp(CS.out.vEgo, CarControllerParams.ASCENT_LONG_SPEED_BP,
+                             CarControllerParams.ASCENT_RPM_BASE_V)
+        apply_throttle = int(round(throttle_base + accel_ff * CarControllerParams.ASCENT_THROTTLE_ACCEL_GAIN))
+        apply_rpm = int(round(rpm_base + accel_ff * CarControllerParams.ASCENT_RPM_ACCEL_GAIN))
+      else:
+        if self.CP.carFingerprint == CAR.SUBARU_ASCENT:
+          self.ascent_accel_feedback_error = 0.0
+        apply_throttle = int(round(np.interp(actuators.accel, CarControllerParams.THROTTLE_LOOKUP_BP, CarControllerParams.THROTTLE_LOOKUP_V)))
+        apply_rpm = int(round(np.interp(actuators.accel, CarControllerParams.RPM_LOOKUP_BP, CarControllerParams.RPM_LOOKUP_V)))
       apply_brake = int(round(np.interp(actuators.accel, CarControllerParams.BRAKE_LOOKUP_BP, CarControllerParams.BRAKE_LOOKUP_V)))
 
       # limit min and max values
-      cruise_throttle = np.clip(apply_throttle, CarControllerParams.THROTTLE_MIN, CarControllerParams.THROTTLE_MAX)
+      throttle_max = _throttle_max_for_car(self.CP.carFingerprint)
+      cruise_throttle = np.clip(apply_throttle, CarControllerParams.THROTTLE_MIN, throttle_max)
       cruise_rpm = np.clip(apply_rpm, CarControllerParams.RPM_MIN, CarControllerParams.RPM_MAX)
       cruise_brake = np.clip(apply_brake, CarControllerParams.BRAKE_MIN, CarControllerParams.BRAKE_MAX)
     else:
+      self.ascent_accel_feedback_error = 0.0
       cruise_throttle = CarControllerParams.THROTTLE_INACTIVE
       cruise_rpm = CarControllerParams.RPM_MIN
       cruise_brake = CarControllerParams.BRAKE_MIN

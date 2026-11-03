@@ -52,11 +52,22 @@ class CarControllerParams:
   BRAKE_LOOKUP_BP = [-3.5, 0]
   BRAKE_LOOKUP_V = [BRAKE_MAX, BRAKE_MIN]
 
+  # Subaru Ascent 2019-21 longitudinal feed-forward.
+  # Hold the 100 km/h feed-forward above the last breakpoint rather than extrapolating.
+  ASCENT_LONG_SPEED_BP = [0.0, 35.0 / 3.6, 70.0 / 3.6, 90.0 / 3.6, 100.0 / 3.6]
+  ASCENT_THROTTLE_BASE_V = [THROTTLE_INACTIVE, 2230, 2610, 2740, 2940]
+  ASCENT_RPM_BASE_V = [RPM_INACTIVE, 1185, 1445, 1545, 1770]
+
+  ASCENT_THROTTLE_MAX = 3800
+  ASCENT_THROTTLE_ACCEL_GAIN = (ASCENT_THROTTLE_MAX - THROTTLE_INACTIVE) / 2.0
+  ASCENT_RPM_ACCEL_GAIN = (RPM_MAX - RPM_INACTIVE) / 2.0
+
 
 class SubaruSafetyFlags(IntFlag):
   GEN2 = 1
   LONG = 2
   PREGLOBAL_REVERSED_DRIVER_TORQUE = 4
+  ASCENT_LONG_THROTTLE = 4096
 
 
 class SubaruFlags(IntFlag):
