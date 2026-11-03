@@ -144,7 +144,7 @@ static bool subaru_tx_hook(const CANPacket_t *msg) {
     violation |= steer_torque_cmd_checks(desired_torque, steer_req, limits);
   }
 
-  if (msg->addr == MSG_SUBARU_ES_Brake && subaru_longitudinal) {
+  if ((msg->addr == MSG_SUBARU_ES_Brake) && subaru_longitudinal) {
     int es_brake_pressure = GET_BYTES_LE(msg, 2, 2);
     violation |= longitudinal_brake_checks(es_brake_pressure, SUBARU_LONG_LIMITS);
   }
@@ -164,7 +164,7 @@ static bool subaru_tx_hook(const CANPacket_t *msg) {
     }
   }
 
-  if (msg->addr == MSG_SUBARU_ES_Status && subaru_longitudinal) {
+  if ((msg->addr == MSG_SUBARU_ES_Status) && subaru_longitudinal) {
     int transmission_rpm = (GET_BYTES_LE(msg, 2, 2) & 0x1FFFU);
     bool rpm_valid = get_longitudinal_allowed() &&
                      !safety_max_limit_check(transmission_rpm, SUBARU_LONG_LIMITS.max_transmission_rpm,
@@ -191,18 +191,20 @@ static safety_config subaru_init(uint16_t param) {
     SUBARU_COMMON_TX_MSGS(SUBARU_ALT_BUS)
   };
 
+#ifdef ALLOW_DEBUG
   static const CanMsg SUBARU_LONG_TX_MSGS[] = {
     SUBARU_BASE_TX_MSGS(SUBARU_MAIN_BUS, MSG_SUBARU_ES_LKAS)
     SUBARU_COMMON_LONG_TX_MSGS(SUBARU_MAIN_BUS)
   };
+#endif
 
   const uint16_t SUBARU_PARAM_GEN2 = 1;
-  const uint16_t SUBARU_PARAM_LONGITUDINAL = 2;
   const uint16_t SUBARU_PARAM_ASCENT_LONG_THROTTLE = 4096;
 
   subaru_gen2 = GET_FLAG(param, SUBARU_PARAM_GEN2);
   subaru_ascent_long_throttle = GET_FLAG(param, SUBARU_PARAM_ASCENT_LONG_THROTTLE);
 #ifdef ALLOW_DEBUG
+  const uint16_t SUBARU_PARAM_LONGITUDINAL = 2;
   subaru_longitudinal = GET_FLAG(param, SUBARU_PARAM_LONGITUDINAL) && subaru_ascent_long_throttle && !subaru_gen2;
 #else
   subaru_longitudinal = false;
@@ -218,8 +220,12 @@ static safety_config subaru_init(uint16_t param) {
     static const RxCheck subaru_rx_checks[] = {
       SUBARU_COMMON_RX_CHECKS(SUBARU_MAIN_BUS)
     };
+#ifdef ALLOW_DEBUG
     ret = subaru_longitudinal ? BUILD_SAFETY_CFG(subaru_rx_checks, SUBARU_LONG_TX_MSGS) :
                                 BUILD_SAFETY_CFG(subaru_rx_checks, SUBARU_TX_MSGS);
+#else
+    ret = BUILD_SAFETY_CFG(subaru_rx_checks, SUBARU_TX_MSGS);
+#endif
   }
   return ret;
 }
